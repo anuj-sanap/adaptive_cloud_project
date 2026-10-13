@@ -45,6 +45,7 @@ try:
         HEARTBEAT_INTERVAL_SEC,
         ENABLE_HTTP_POST,
         SERVER_BASE_URL,
+        NODE_API_KEY,
     )
     from node_agent.id_generator import get_or_create_node_id
     from node_agent.metrics      import collect_node_telemetry
@@ -54,6 +55,9 @@ try:
         send_telemetry_with_response,
         send_heartbeat,
         fetch_node_alert,
+        buffer_telemetry,
+        get_buffered_count,
+        flush_buffered_telemetry,
     )
     from node_agent.notifier import NodeAlertNotifier
 except ImportError:
@@ -62,6 +66,7 @@ except ImportError:
         HEARTBEAT_INTERVAL_SEC,
         ENABLE_HTTP_POST,
         SERVER_BASE_URL,
+        NODE_API_KEY,
     )
     from id_generator import get_or_create_node_id
     from metrics      import collect_node_telemetry
@@ -71,6 +76,9 @@ except ImportError:
         send_telemetry_with_response,
         send_heartbeat,
         fetch_node_alert,
+        buffer_telemetry,
+        get_buffered_count,
+        flush_buffered_telemetry,
     )
     from notifier import NodeAlertNotifier
 
@@ -116,10 +124,11 @@ def run_agent(
     heartbeat_sec: int    = HEARTBEAT_INTERVAL_SEC,
     enable_post: bool     = ENABLE_HTTP_POST,
     node_suffix: str      = "",
+    api_key: str          = None,
 ):
     """
     Full agent lifecycle:
-      register → heartbeat thread → telemetry loop (with reconnect on failure)
+      register → heartbeat thread → telemetry loop (with reconnect & offline buffering on failure)
     """
 
     # ── 1. Persistent node identity ──────────────────────────────────────────
@@ -130,21 +139,35 @@ def run_agent(
         for mod_name in ["node_agent.config", "config"]:
             if mod_name in sys.modules:
                 mod = sys.modules[mod_name]
-                mod.SERVER_BASE_URL = server_base_url
-                mod.REGISTER_URL    = f"{server_base_url}/register"
-                mod.TELEMETRY_URL   = f"{server_base_url}/telemetry"
-                mod.HEARTBEAT_URL   = f"{server_base_url}/heartbeat"
+                mod.SERVER_BASE_URL     = server_base_url
+                mod.REGISTER_URL        = f"{server_base_url}/register"
+                mod.TELEMETRY_URL       = f"{server_base_url}/telemetry"
+                mod.BATCH_TELEMETRY_URL = f"{server_base_url}/telemetry/batch"
+                mod.HEARTBEAT_URL       = f"{server_base_url}/heartbeat"
         for mod_name in ["node_agent.server_client", "server_client"]:
             if mod_name in sys.modules:
                 mod = sys.modules[mod_name]
-                mod.REGISTER_URL    = f"{server_base_url}/register"
-                mod.TELEMETRY_URL   = f"{server_base_url}/telemetry"
-                mod.HEARTBEAT_URL   = f"{server_base_url}/heartbeat"
+                mod.REGISTER_URL        = f"{server_base_url}/register"
+                mod.TELEMETRY_URL       = f"{server_base_url}/telemetry"
+                mod.BATCH_TELEMETRY_URL = f"{server_base_url}/telemetry/batch"
+                mod.HEARTBEAT_URL       = f"{server_base_url}/heartbeat"
+
+    # Patch API key if explicitly provided via CLI
+    if api_key:
+        for mod_name in ["node_agent.config", "config", "node_agent.server_client", "server_client"]:
+            if mod_name in sys.modules:
+                mod = sys.modules[mod_name]
+                mod.NODE_API_KEY = api_key
+
+    # Retrieve active key for logging
+    active_key = api_key or os.getenv("NODE_API_KEY") or getattr(sys.modules.get("node_agent.config", None), "NODE_API_KEY", "")
+    key_display = f"Configured ({active_key[:4]}...)" if active_key else "None / Unauthenticated"
 
     print("=" * 65)
     print("[NODE AGENT] LIVE NODE MONITORING AGENT STARTING")
     print(f"  Node ID      : {node_id}")
     print(f"  Server       : {server_base_url}")
+    print(f"  Auth API Key : {key_display}")
     print(f"  Telemetry    : every {interval_sec}s")
     print(f"  Heartbeat    : every {heartbeat_sec}s")
     print(f"  HTTP POST    : {'ENABLED' if enable_post else 'DISABLED (dry-run)'}")
@@ -190,20 +213,28 @@ def run_agent(
                     print("  Telemetry : sent [OK]")
                     consecutive_failures = 0
 
+                    # Flush any snapshots that were buffered while disconnected
+                    buffered_count = get_buffered_count()
+                    if buffered_count > 0:
+                        print(f"  [RECONNECTED] Flushing {buffered_count} buffered snapshot(s) ...")
+                        flush_buffered_telemetry(node_id)
+
                     # ── Process Server-Side Predictive Maintenance Alert ──
                     alert_data = resp.get("alert") if isinstance(resp, dict) else None
                     notifier.process_server_alert(alert_data)
                 else:
                     consecutive_failures += 1
-                    print(f"  Telemetry : FAILED (consecutive={consecutive_failures})")
+                    buffered_now = buffer_telemetry(payload)
+                    print(f"  Telemetry : FAILED (consecutive={consecutive_failures}, offline_buffered={buffered_now})")
 
-                    # After N consecutive failures assume server restarted → re-register
+                    # After N consecutive failures, attempt non-blocking re-registration
                     if consecutive_failures >= MAX_FAILURES_BEFORE_REREGISTER:
                         print(f"[RECONNECT] {MAX_FAILURES_BEFORE_REREGISTER} consecutive failures."
-                              " Attempting to re-register ...")
-                        register_with_retry(node_id)   # blocks until server is back
-                        consecutive_failures = 0
-                        print("[RECONNECT] Re-registered successfully. Resuming telemetry.")
+                              " Attempting to re-register with server ...")
+                        re_ok = register_with_retry(node_id, max_attempts=2)
+                        if re_ok:
+                            consecutive_failures = 0
+                            print("[RECONNECT] Re-registered successfully. Resuming normal telemetry.")
 
             time.sleep(interval_sec)
 
@@ -228,6 +259,10 @@ def main():
     parser.add_argument(
         "--server-ip", type=str, default=None,
         help="Central server IP address (e.g. 10.175.163.77), port defaults to 8000"
+    )
+    parser.add_argument(
+        "--api-key", type=str, default=None,
+        help="Cluster API Key for authenticating with the Central Server"
     )
     parser.add_argument(
         "--interval", type=int, default=TELEMETRY_INTERVAL_SEC,
@@ -262,6 +297,7 @@ def main():
         heartbeat_sec=args.heartbeat,
         enable_post=not args.no_post,
         node_suffix=args.node_suffix,
+        api_key=args.api_key,
     )
 
 

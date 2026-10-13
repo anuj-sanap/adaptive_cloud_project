@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.join(BASE_DIR, "src"))
 from fastapi.testclient import TestClient
 from central_server.api import app
 from central_server.database import init_db, get_connection
+from central_server.security import get_cluster_api_key
 from node_agent.notifier import NodeAlertNotifier
 from node_agent.server_client import send_telemetry_with_response, fetch_node_alert
 
@@ -37,14 +38,16 @@ def run_tests():
     print("=" * 68)
 
     init_db()
+    api_key = get_cluster_api_key()
+    auth_headers = {"X-API-Key": api_key}
     client = TestClient(app)
 
     affected_node_id = "test_node_alert_03"
     healthy_node_id  = "test_node_healthy_04"
 
     # Register both nodes
-    client.post("/nodes/register", json={"node_id": affected_node_id, "hostname": "NODE-03", "operating_system": "Windows 11"})
-    client.post("/nodes/register", json={"node_id": healthy_node_id, "hostname": "NODE-04", "operating_system": "Windows 11"})
+    client.post("/register", json={"node_id": affected_node_id, "hostname": "NODE-03", "operating_system": "Windows 11"}, headers=auth_headers)
+    client.post("/register", json={"node_id": healthy_node_id, "hostname": "NODE-04", "operating_system": "Windows 11"}, headers=auth_headers)
 
     notifier_affected = NodeAlertNotifier(affected_node_id)
     notifier_healthy  = NodeAlertNotifier(healthy_node_id)
@@ -64,7 +67,7 @@ def run_tests():
         "network_recv_mb": 18.0,
         "duration_sec": 3600
     }
-    r_nom = client.post("/telemetry", json=nominal_payload).json()
+    r_nom = client.post("/telemetry", json=nominal_payload, headers=auth_headers).json()
     assert r_nom.get("alert") is None, "Unexpected alert generated for nominal telemetry!"
     triggered = notifier_affected.process_server_alert(r_nom.get("alert"))
     assert not triggered
@@ -85,7 +88,7 @@ def run_tests():
         "network_recv_mb": 190.0,
         "duration_sec": 7200
     }
-    r_crit = client.post("/telemetry", json=critical_payload).json()
+    r_crit = client.post("/telemetry", json=critical_payload, headers=auth_headers).json()
     server_alert = r_crit.get("alert")
     assert server_alert is not None, "Central server failed to return ML alert in telemetry response!"
     assert server_alert["node_id"] == affected_node_id
@@ -111,7 +114,7 @@ def run_tests():
         "cpu_utilization": 20.0,
         "ram_utilization": 30.0,
         "disk_utilization": 40.0
-    }).json()
+    }, headers=auth_headers).json()
     assert r_healthy.get("alert") is None
     assert not notifier_healthy.process_server_alert(r_healthy.get("alert"))
 
@@ -130,7 +133,7 @@ def run_tests():
     # ─────────────────────────────────────────────────────────────────────────
     print("\n[Phase 4] Testing deduplication on subsequent polling ticks...")
     for tick in range(2, 5):
-        r_repeat = client.post("/telemetry", json=critical_payload).json()
+        r_repeat = client.post("/telemetry", json=critical_payload, headers=auth_headers).json()
         repeat_alert = r_repeat.get("alert")
         assert repeat_alert is not None
         assert repeat_alert["alert_id"] == server_alert["alert_id"]
@@ -144,7 +147,7 @@ def run_tests():
     # Phase 5: Auto-Recovery when Node Health Returns to Low Risk
     # ─────────────────────────────────────────────────────────────────────────
     print("\n[Phase 5] Testing recovery when node workload subsides...")
-    r_recovered = client.post("/telemetry", json=nominal_payload).json()
+    r_recovered = client.post("/telemetry", json=nominal_payload, headers=auth_headers).json()
     assert r_recovered.get("alert") is None
     cleared = notifier_affected.process_server_alert(r_recovered.get("alert"))
     assert cleared is False

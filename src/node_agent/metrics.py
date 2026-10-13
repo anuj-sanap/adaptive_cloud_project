@@ -56,29 +56,30 @@ def collect_node_telemetry(node_id: str) -> dict:
         disk_util = round(du.percent, 2)
         disk_used_gb = round(du.used / (1024 ** 3), 2)
         disk_total_gb = round(du.total / (1024 ** 3), 2)
+        disk_free_gb = round(du.free / (1024 ** 3), 2)
     except Exception:
-        disk_util, disk_used_gb, disk_total_gb = 0.0, 0.0, 0.0
+        disk_util, disk_used_gb, disk_total_gb, disk_free_gb = None, None, None, None
 
     # Network I/O counters
     net_io = psutil.net_io_counters()
-    net_sent_bytes = net_io.bytes_sent if net_io else 0
-    net_recv_bytes = net_io.bytes_recv if net_io else 0
-    net_sent_mb = round(net_sent_bytes / (1024 * 1024), 2)
-    net_recv_mb = round(net_recv_bytes / (1024 * 1024), 2)
+    net_sent_bytes = net_io.bytes_sent if net_io else None
+    net_recv_bytes = net_io.bytes_recv if net_io else None
+    net_sent_mb = round(net_sent_bytes / (1024 * 1024), 2) if net_sent_bytes is not None else None
+    net_recv_mb = round(net_recv_bytes / (1024 * 1024), 2) if net_recv_bytes is not None else None
 
     # Disk I/O counters
     disk_io = psutil.disk_io_counters()
-    disk_read_bytes = disk_io.read_bytes if disk_io else 0
-    disk_write_bytes = disk_io.write_bytes if disk_io else 0
-    disk_read_mb = round(disk_read_bytes / (1024 * 1024), 2)
-    disk_write_mb = round(disk_write_bytes / (1024 * 1024), 2)
+    disk_read_bytes = disk_io.read_bytes if disk_io else None
+    disk_write_bytes = disk_io.write_bytes if disk_io else None
+    disk_read_mb = round(disk_read_bytes / (1024 * 1024), 2) if disk_read_bytes is not None else None
+    disk_write_mb = round(disk_write_bytes / (1024 * 1024), 2) if disk_write_bytes is not None else None
 
     # CPU temperature & process count
     cpu_temp = get_cpu_temperature()
     process_count = len(psutil.pids())
 
     # Load averages (1-min, 5-min, 15-min) using psutil.getloadavg()
-    load_1min, load_5min, load_15min = 0.0, 0.0, 0.0
+    load_1min, load_5min, load_15min = None, None, None
     if hasattr(psutil, "getloadavg"):
         try:
             loads = psutil.getloadavg()
@@ -94,7 +95,7 @@ def collect_node_telemetry(node_id: str) -> dict:
         boot_time = psutil.boot_time()
         duration_sec = int(time.time() - boot_time)
     except Exception:
-        duration_sec = 0
+        duration_sec = None
 
     # Node server type / role (configurable via env var, defaults to ComputeNode)
     server_type = os.getenv("NODE_SERVER_TYPE", "ComputeNode")
@@ -103,6 +104,7 @@ def collect_node_telemetry(node_id: str) -> dict:
         "node_id": node_id,
         "hostname": hostname,
         "operating_system": os_info,
+        "location_label": os.getenv("NODE_LOCATION_LABEL", "").strip() or None,
         "timestamp": timestamp,
         "metrics": {
             "cpu_utilization": cpu_util,
@@ -115,6 +117,7 @@ def collect_node_telemetry(node_id: str) -> dict:
             "disk_utilization": disk_util,
             "disk_used_gb": disk_used_gb,
             "disk_total_gb": disk_total_gb,
+            "disk_free_gb": disk_free_gb,
             "network_sent_bytes": net_sent_bytes,
             "network_recv_bytes": net_recv_bytes,
             "network_sent_mb": net_sent_mb,

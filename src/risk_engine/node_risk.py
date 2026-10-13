@@ -120,12 +120,20 @@ def combine_node_risk(
     factors = _security_factors(security_result, security_score)
     factors.extend(_maintenance_factors(maintenance_result, maintenance_score))
 
+    sec_level = _risk_level(security_score, thresholds) if security_score is not None else "N/A"
+    maint_level = _risk_level(maintenance_score, thresholds) if maintenance_score is not None else "N/A"
+
     return {
         "node_id": node_id,
         "security_risk": security_score,
         "maintenance_risk": maintenance_score,
         "overall_risk": overall_score,
+        "overall_risk_score": overall_score,
         "risk_level": _risk_level(overall_score, thresholds),
+        "overall_risk_level": _risk_level(overall_score, thresholds),
+        "security_risk_level": sec_level,
+        "failure_risk_level": maint_level,
+        "maintenance_risk_level": maint_level,
         "timestamp": result_timestamp,
         "contributing_factors": factors,
         "weights_used": normalized_weights,

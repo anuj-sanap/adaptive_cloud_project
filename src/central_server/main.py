@@ -18,9 +18,10 @@ from central_server.database import init_db
 
 
 def main():
+    default_port = int(os.getenv("PORT") or os.getenv("SERVER_PORT", "8000"))
     parser = argparse.ArgumentParser(description="Central Telemetry REST API Server")
     parser.add_argument("--host", type=str, default=os.getenv("SERVER_HOST", "0.0.0.0"), help="Host IP to bind (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=int(os.getenv("SERVER_PORT", "8000")), help="Port to listen on (default: 8000)")
+    parser.add_argument("--port", type=int, default=default_port, help=f"Port to listen on (default: {default_port})")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload on code change")
     args = parser.parse_args()
 
@@ -34,7 +35,14 @@ def main():
     print(f"  • Telemetry Url: http://localhost:{args.port}/telemetry")
     print("=" * 65)
 
-    uvicorn.run("central_server.api:app", host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run(
+        "central_server.api:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ if SRC_DIR not in sys.path:
 from fastapi.testclient import TestClient
 from central_server.api import app
 from central_server.database import init_db, get_db_path
+from central_server.security import get_cluster_api_key
 
 client = TestClient(app)
 
@@ -25,9 +26,17 @@ def run_tests():
 
     # Initialize DB
     init_db()
+    api_key = get_cluster_api_key()
+    auth_headers = {"X-API-Key": api_key}
 
-    # 1. Test POST /register
-    print("\n[TEST 1/5] Testing POST /register ...")
+    # 0. Test Authentication Rejection
+    print("\n[TEST 0/6] Testing Authentication Enforcement (401 on missing key) ...")
+    unauth_resp = client.post("/register", json={"node_id": "unauth_node"})
+    assert unauth_resp.status_code == 401
+    print("  [OK] Unauthenticated request correctly rejected with 401 Unauthorized")
+
+    # 1. Test POST /register with Auth
+    print("\n[TEST 1/6] Testing POST /register with Valid API Key ...")
     reg_payload = {
         "node_id": "test_node_alpha",
         "hostname": "alpha-server-01",
@@ -35,7 +44,7 @@ def run_tests():
         "operating_system": "Linux Ubuntu 22.04",
         "hardware_info": {"cpu_cores": 8, "ram_gb": 16}
     }
-    response = client.post("/register", json=reg_payload)
+    response = client.post("/register", json=reg_payload, headers=auth_headers)
     print(f"  Response Status: {response.status_code}")
     print(f"  Response Body  : {response.json()}")
     assert response.status_code == 200
@@ -44,7 +53,7 @@ def run_tests():
     print("  [OK] POST /register PASSED")
 
     # 2. Test POST /telemetry
-    print("\n[TEST 2/5] Testing POST /telemetry ...")
+    print("\n[TEST 2/6] Testing POST /telemetry ...")
     telemetry_payload = {
         "node_id": "test_node_alpha",
         "hostname": "alpha-server-01",
@@ -62,7 +71,7 @@ def run_tests():
             "process_count": 180
         }
     }
-    response = client.post("/telemetry", json=telemetry_payload)
+    response = client.post("/telemetry", json=telemetry_payload, headers=auth_headers)
     print(f"  Response Status: {response.status_code}")
     print(f"  Response Body  : {response.json()}")
     assert response.status_code == 200
@@ -87,13 +96,33 @@ def run_tests():
             "process_count": 95
         }
     }
-    response = client.post("/telemetry", json=auto_node_payload)
+    response = client.post("/telemetry", json=auto_node_payload, headers=auth_headers)
     assert response.status_code == 200
     assert response.json()["node_id"] == "test_node_beta_auto"
     print("  [OK] Auto-Registration via POST /telemetry PASSED")
 
-    # 3. Test GET /nodes
-    print("\n[TEST 3/5] Testing GET /nodes ...")
+    # 3. Test POST /telemetry/batch (Buffered historical metrics)
+    print("\n[TEST 3/6] Testing POST /telemetry/batch (Offline Buffering Recovery) ...")
+    batch_payload = {
+        "node_id": "test_node_alpha",
+        "snapshots": [
+            {
+                "timestamp": "2026-09-19T14:15:10+00:00",
+                "metrics": {"cpu_utilization": 30.0, "ram_utilization": 50.0, "disk_utilization": 40.0}
+            },
+            {
+                "timestamp": "2026-09-19T14:15:15+00:00",
+                "metrics": {"cpu_utilization": 35.0, "ram_utilization": 52.0, "disk_utilization": 40.0}
+            }
+        ]
+    }
+    batch_resp = client.post("/telemetry/batch", json=batch_payload, headers=auth_headers)
+    assert batch_resp.status_code == 200
+    assert batch_resp.json()["inserted_count"] == 2
+    print("  [OK] POST /telemetry/batch PASSED")
+
+    # 4. Test GET /nodes
+    print("\n[TEST 4/6] Testing GET /nodes ...")
     response = client.get("/nodes")
     print(f"  Response Status: {response.status_code}")
     print(f"  Response Body  : {json.dumps(response.json(), indent=2)}")
@@ -105,8 +134,8 @@ def run_tests():
     assert "test_node_beta_auto" in node_ids
     print("  [OK] GET /nodes PASSED")
 
-    # 4. Test GET /nodes/{node_id}
-    print("\n[TEST 4/5] Testing GET /nodes/test_node_alpha ...")
+    # 5. Test GET /nodes/{node_id}
+    print("\n[TEST 5/6] Testing GET /nodes/test_node_alpha ...")
     response = client.get("/nodes/test_node_alpha")
     print(f"  Response Status: {response.status_code}")
     node_detail = response.json()
@@ -118,9 +147,9 @@ def run_tests():
     assert len(node_detail["recent_telemetry"]) > 0
     print("  [OK] GET /nodes/{node_id} PASSED")
 
-    # 5. Test POST /heartbeat
-    print("\n[TEST 5/5] Testing POST /heartbeat ...")
-    response = client.post("/heartbeat", json={"node_id": "test_node_alpha"})
+    # 6. Test POST /heartbeat
+    print("\n[TEST 6/6] Testing POST /heartbeat ...")
+    response = client.post("/heartbeat", json={"node_id": "test_node_alpha"}, headers=auth_headers)
     print(f"  Response Status: {response.status_code}")
     print(f"  Response Body  : {response.json()}")
     assert response.status_code == 200

@@ -33,6 +33,12 @@ def get_or_create_node_id(suffix: str = "") -> str:
         suffix: Appended to both the file name and the generated node_id so
                 multiple agents on the same machine each maintain distinct IDs.
     """
+    configured_id = os.getenv("NODE_ID", "").strip()
+    if configured_id:
+        if not re.fullmatch(r"[a-zA-Z0-9_.-]{3,128}", configured_id):
+            raise ValueError("NODE_ID must be 3-128 characters using letters, digits, '.', '_' or '-'.")
+        return configured_id
+
     id_file = _id_file_path(suffix)
 
     if os.path.exists(id_file):
@@ -44,12 +50,18 @@ def get_or_create_node_id(suffix: str = "") -> str:
         except Exception as exc:
             print(f"[ID GENERATOR WARN] Could not read identity file ({exc}). Re-generating.")
 
-    # Build a new ID: node_<clean_hostname>_<8-char uuid>[_suffix]
+    import hashlib
+    # Build a new ID: node_<clean_hostname>_<hw_hash>_<uuid>[_suffix]
     raw_hostname  = socket.gethostname()
     clean_host    = re.sub(r"[^a-zA-Z0-9_-]", "", raw_hostname).lower()[:12]
-    unique_part   = uuid.uuid4().hex[:8]
+    try:
+        hw_node = uuid.getnode()
+        hw_hash = hashlib.sha256(str(hw_node).encode()).hexdigest()[:6]
+    except Exception:
+        hw_hash = "000000"
+    rand_part     = uuid.uuid4().hex[:6]
     suffix_part   = f"_{suffix}" if suffix else ""
-    node_id       = f"node_{clean_host}_{unique_part}{suffix_part}"
+    node_id       = f"node_{clean_host}_{hw_hash}_{rand_part}{suffix_part}"
 
     try:
         with open(id_file, "w", encoding="utf-8") as fh:

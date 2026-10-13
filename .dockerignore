@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Database files & local runtime data
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/.api_key
+data/test_*
+
+# Frontend source & dependencies (deployed separately to Azure Static Web Apps)
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Testing & temporary logs
+results/
+tests/
+scripts/__pycache__/
+*.log

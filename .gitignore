@@ -16,6 +16,13 @@ data/telemetry.db
 .env.*
 !.env.example
 .streamlit/secrets.toml
+*.key
+*.token
+*.api_key
+api_key.txt
+server_api_key.txt
+data/.api_key
+src/node_agent/api_key.txt
 
 # Runtime databases and local state
 *.db
